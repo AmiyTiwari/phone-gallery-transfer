@@ -12,9 +12,12 @@ PORT = 8080
 POLL_INTERVAL = 2  # seconds
 
 _ADB_FALLBACKS = [
-    os.path.expanduser("~/Library/Android/sdk/platform-tools/adb"),  # macOS
+    os.path.expanduser("~/platform-tools/adb"),                       # downloaded by start.sh
+    os.path.expanduser("~/Library/Android/sdk/platform-tools/adb"),  # Android Studio macOS
+    os.path.expanduser("~/Android/Sdk/platform-tools/adb"),          # Android Studio Linux
     "/usr/local/bin/adb",
     "/usr/bin/adb",
+    "/opt/homebrew/bin/adb",                                          # Homebrew macOS ARM
 ]
 
 def _find_adb() -> str:
