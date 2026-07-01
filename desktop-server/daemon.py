@@ -37,8 +37,18 @@ def adb(*args) -> subprocess.CompletedProcess:
     return subprocess.run([ADB_BIN, *args], capture_output=True, text=True)
 
 
+def restart_adb_server():
+    subprocess.run([ADB_BIN, "kill-server"], capture_output=True)
+    subprocess.run([ADB_BIN, "start-server"], capture_output=True)
+    print("[daemon] adb server restarted")
+
+
 def get_connected_devices() -> list[str]:
     result = adb("devices")
+    # If adb server died, restart and retry once
+    if result.returncode != 0 or "error" in result.stdout.lower():
+        restart_adb_server()
+        result = adb("devices")
     lines = result.stdout.strip().splitlines()
     devices = []
     for line in lines[1:]:  # skip "List of devices attached" header
@@ -73,9 +83,20 @@ def main():
 
     print(f"[daemon] watching for USB devices (poll every {POLL_INTERVAL}s)...")
     active_devices: set[str] = set()
+    consecutive_failures = 0
 
     while True:
-        current = set(get_connected_devices())
+        try:
+            current = set(get_connected_devices())
+            consecutive_failures = 0
+        except Exception as e:
+            consecutive_failures += 1
+            if consecutive_failures >= 3:
+                print(f"[daemon] adb unresponsive, restarting server...", file=sys.stderr)
+                restart_adb_server()
+                consecutive_failures = 0
+            time.sleep(POLL_INTERVAL)
+            continue
 
         # newly connected
         for serial in current - active_devices:
