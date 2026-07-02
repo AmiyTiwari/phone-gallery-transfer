@@ -4,9 +4,14 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# ── 1. Find or install ADB ─────────────────────────────────────────────────
+# ── Parse flags ───────────────────────────────────────────────────────────
+USB_MODE=0
+for arg in "$@"; do
+    [ "$arg" = "--usb" ] && USB_MODE=1
+done
+
+# ── 1. Find or install ADB (needed for USB mode) ──────────────────────────
 find_adb() {
-    # Check common locations
     for candidate in \
         "$HOME/platform-tools/adb" \
         "$HOME/Library/Android/sdk/platform-tools/adb" \
@@ -20,34 +25,12 @@ find_adb() {
             return 0
         fi
     done
-    # Check PATH
     if command -v adb &>/dev/null; then
         command -v adb
         return 0
     fi
     return 1
 }
-
-ADB_BIN=$(find_adb || true)
-
-if [ -z "$ADB_BIN" ]; then
-    echo "[start] adb not found — downloading platform-tools..."
-    OS="$(uname -s)"
-    case "$OS" in
-        Darwin)  PT_URL="https://dl.google.com/android/repository/platform-tools-latest-darwin.zip" ;;
-        Linux)   PT_URL="https://dl.google.com/android/repository/platform-tools-latest-linux.zip" ;;
-        *)       echo "[start] ERROR: unsupported OS $OS — install adb manually"; exit 1 ;;
-    esac
-    curl -L -o "$HOME/platform-tools.zip" "$PT_URL"
-    unzip -q "$HOME/platform-tools.zip" -d "$HOME/"
-    rm "$HOME/platform-tools.zip"
-    chmod +x "$HOME/platform-tools/adb"
-    ADB_BIN="$HOME/platform-tools/adb"
-    echo "[start] adb installed at $ADB_BIN"
-fi
-
-export ADB="$ADB_BIN"
-echo "[start] using adb: $ADB_BIN"
 
 # ── 2. Check Python ────────────────────────────────────────────────────────
 if ! command -v python3 &>/dev/null; then
@@ -59,14 +42,43 @@ fi
 if ! python3 -c "import fastapi" 2>/dev/null; then
     echo "[start] installing dependencies..."
     pip3 install -r requirements.txt
+elif ! python3 -c "import zeroconf" 2>/dev/null; then
+    echo "[start] installing zeroconf..."
+    pip3 install zeroconf==0.132.2
 fi
 
-# ── 4. Launch daemon + server ─────────────────────────────────────────────
-echo "[start] starting daemon + server..."
+# ── 4. Launch ──────────────────────────────────────────────────────────────
+if [ "$USB_MODE" = "1" ]; then
+    echo "[start] USB mode — ADB daemon + server (no mDNS)"
 
-python3 -u daemon.py &
-DAEMON_PID=$!
+    ADB_BIN=$(find_adb || true)
+    if [ -z "$ADB_BIN" ]; then
+        echo "[start] adb not found — downloading platform-tools..."
+        OS="$(uname -s)"
+        case "$OS" in
+            Darwin) PT_URL="https://dl.google.com/android/repository/platform-tools-latest-darwin.zip" ;;
+            Linux)  PT_URL="https://dl.google.com/android/repository/platform-tools-latest-linux.zip" ;;
+            *) echo "[start] ERROR: unsupported OS $OS — install adb manually"; exit 1 ;;
+        esac
+        curl -L -o "$HOME/platform-tools.zip" "$PT_URL"
+        unzip -q "$HOME/platform-tools.zip" -d "$HOME/"
+        rm "$HOME/platform-tools.zip"
+        chmod +x "$HOME/platform-tools/adb"
+        ADB_BIN="$HOME/platform-tools/adb"
+        echo "[start] adb installed at $ADB_BIN"
+    fi
 
-trap "kill $DAEMON_PID 2>/dev/null; echo '[start] stopped.'" EXIT INT TERM
+    export ADB="$ADB_BIN"
+    echo "[start] using adb: $ADB_BIN"
 
-python3 server.py
+    python3 -u daemon.py &
+    DAEMON_PID=$!
+    trap "kill $DAEMON_PID 2>/dev/null; echo '[start] stopped.'" EXIT INT TERM
+    python3 server.py
+
+else
+    echo "[start] Wi-Fi mode (default) — server with mDNS discovery"
+    echo "[start] Tip: use 'bash start.sh --usb' for USB cable mode"
+    trap "echo '[start] stopped.'" EXIT INT TERM
+    MDNS_ENABLED=1 python3 server.py
+fi
